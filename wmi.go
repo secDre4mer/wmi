@@ -123,6 +123,9 @@ var DefaultClient = &Client{}
 
 // coinitService coinitializes WMI service. If no error is returned, a cleanup function
 // is returned which must be executed (usually deferred) to clean up allocated resources.
+// Because coinitServer calls ole.CoInitializeEx, which uses thread specific resources,
+// the caller must call the deferred cleanup function on the same go routine that
+// called coinitService.
 func (c *Client) coinitService(connectServerArgs ...interface{}) (*ole.IDispatch, func(), error) {
 	var unknown *ole.IUnknown
 	var wmi *ole.IDispatch
@@ -141,6 +144,7 @@ func (c *Client) coinitService(connectServerArgs ...interface{}) (*ole.IDispatch
 			unknown.Release()
 		}
 		ole.CoUninitialize()
+		runtime.UnlockOSThread()
 	}
 
 	// if we error'ed here, clean up immediately
@@ -150,6 +154,8 @@ func (c *Client) coinitService(connectServerArgs ...interface{}) (*ole.IDispatch
 			deferFn()
 		}
 	}()
+
+	runtime.LockOSThread()
 
 	err = ole.CoInitializeEx(0, ole.COINIT_MULTITHREADED)
 	if err != nil {
@@ -239,8 +245,6 @@ func (c *Client) Query(query string, dst interface{}, connectServerArgs ...inter
 
 	lock.Lock()
 	defer lock.Unlock()
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
 
 	service, cleanup, err := c.coinitService(connectServerArgs...)
 	if err != nil {
@@ -368,7 +372,7 @@ func (c *Client) loadEntity(dst interface{}, src *ole.IDispatch) (errFieldMismat
 			f = f.Elem()
 		}
 
-		if prop.VT == 0x1 { //VT_NULL
+		if prop.VT == 0x1 { // VT_NULL
 			continue
 		}
 
@@ -467,7 +471,7 @@ func (c *Client) loadEntity(dst interface{}, src *ole.IDispatch) (errFieldMismat
 					Reason:     "not a Float64",
 				}
 			}
-		
+
 		default:
 			if f.Kind() == reflect.Slice {
 				switch f.Type().Elem().Kind() {
